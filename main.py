@@ -29,8 +29,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--metric",
         default="both",
-        choices=["wind", "sun", "both"],
-        help="Which analysis to run (default: %(default)s).",
+        choices=["wind", "sun", "both", "compare"],
+        help="Which analysis to run (default: %(default)s). "
+        "'compare' overlays wind and sun for every hour.",
     )
     p.add_argument(
         "--location",
@@ -130,6 +131,46 @@ def _run_sun(
     return 0
 
 
+def _run_compare(
+    loc: Location, start_date: str, end_date: str, cfg: Config, use_cache: bool
+) -> int:
+    unit = cfg.wind_speed_unit
+    wind_df, rc = _fetch(
+        lambda: fetch.fetch_wind(
+            loc.latitude, loc.longitude, start_date, end_date,
+            unit=unit, cache_dir=cfg.cache_dir, use_cache=use_cache,
+        )
+    )
+    if rc:
+        return rc
+    sun_df, rc = _fetch(
+        lambda: fetch.fetch_solar(
+            loc.latitude, loc.longitude, start_date, end_date,
+            cache_dir=cfg.cache_dir, use_cache=use_cache,
+        )
+    )
+    if rc:
+        return rc
+
+    print(f"[compare] {len(wind_df):,} + {len(sun_df):,} hourly observations. Analyzing...")
+    wind_hourly = analyze.by_hour(wind_df)
+    sun_hourly = solar.by_hour(sun_df)
+
+    text = report.build_comparison_report(
+        wind_hourly, sun_hourly, loc.name, unit, cfg.years, len(wind_df)
+    )
+    summary_path = report.write_report(text, cfg.output_dir, "compare_summary.txt")
+    chart_path = plots.wind_sun_overlay(
+        wind_hourly, sun_hourly, loc.name, unit, cfg.output_dir
+    )
+
+    print()
+    print(text)
+    print(f"Saved comparison summary: {summary_path}")
+    print(f"Saved comparison chart  : {chart_path}")
+    return 0
+
+
 def run(cfg: Config, metric: str = "both", use_cache: bool = True) -> int:
     """Execute the selected pipeline(s). Returns a process exit code."""
     try:
@@ -143,6 +184,9 @@ def run(cfg: Config, metric: str = "both", use_cache: bool = True) -> int:
 
     print(f"Location: {loc.name} ({loc.latitude:.4f}, {loc.longitude:.4f})")
     start_date, end_date = fetch.default_date_range(cfg.years)
+
+    if metric == "compare":
+        return _run_compare(loc, start_date, end_date, cfg, use_cache)
 
     # Wind and sun are independent API calls, so run both even if one fails and
     # return the worst exit code — a wind failure shouldn't hide the sun report.

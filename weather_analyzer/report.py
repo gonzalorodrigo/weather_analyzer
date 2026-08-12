@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import List
 
 import pandas as pd
 
@@ -164,5 +165,94 @@ def build_sun_report(
     sections.append("")
     sections.append("=== Mean solar radiation by hour ===")
     sections.append(sun_hour_table(hourly, set(daylight)))
+    sections.append("")
+    return "\n".join(sections)
+
+
+# --- Wind vs sun comparison -------------------------------------------------
+
+
+def _normalize(series: pd.Series) -> pd.Series:
+    """Scale a series to [0, 1]; a flat series maps to all zeros."""
+    lo, hi = series.min(), series.max()
+    if pd.isna(lo) or hi == lo:
+        return series * 0.0
+    return (series - lo) / (hi - lo)
+
+
+def combined_watering_hours(
+    wind_hourly: pd.DataFrame,
+    sun_hourly: pd.DataFrame,
+    n: int = 3,
+    threshold: float = solar.DEFAULT_DAYLIGHT_THRESHOLD,
+) -> List[int]:
+    """Daylight hours that are best on BOTH low wind and low sun, best first.
+
+    Wind speed and radiation are each normalized to [0, 1] across the daylight
+    hours and summed; the lowest combined score wins. Restricted to daylight so
+    the recommendation is an actual watering time, not the middle of the night.
+    """
+    daylight = solar.daylight_hours(sun_hourly, threshold)
+    if not daylight:
+        return []
+    wind = wind_hourly["mean_speed"].reindex(daylight)
+    sun = sun_hourly["mean_radiation"].reindex(daylight)
+    combined = (_normalize(wind) + _normalize(sun)).dropna().sort_values()
+    return [int(h) for h in combined.index[:n]]
+
+
+def compare_table(
+    wind_hourly: pd.DataFrame, sun_hourly: pd.DataFrame, unit: str, daylight: set[int]
+) -> str:
+    """Side-by-side table of mean wind and mean sun for each hour of day."""
+    label = UNIT_LABELS.get(unit, unit)
+    lines = [
+        f"{'hour':>5}  {'wind ' + label:>12}  {'sun ' + RADIATION_LABEL:>12}  "
+        f"{'daylight':>8}",
+        f"{'-' * 5}  {'-' * 12}  {'-' * 12}  {'-' * 8}",
+    ]
+    speeds = wind_hourly["mean_speed"].reindex(range(24))
+    rad = sun_hourly["mean_radiation"].reindex(range(24))
+    for hour in range(24):
+        w = speeds.get(hour)
+        s = rad.get(hour)
+        w_str = f"{w:>12.1f}" if pd.notna(w) else f"{'n/a':>12}"
+        s_str = f"{s:>12.1f}" if pd.notna(s) else f"{'n/a':>12}"
+        flag = "yes" if hour in daylight else "no"
+        lines.append(f"{_fmt_hour(hour):>5}  {w_str}  {s_str}  {flag:>8}")
+    return "\n".join(lines)
+
+
+def build_comparison_report(
+    wind_hourly: pd.DataFrame,
+    sun_hourly: pd.DataFrame,
+    location_name: str,
+    unit: str,
+    years: int,
+    observations: int,
+    threshold: float = solar.DEFAULT_DAYLIGHT_THRESHOLD,
+) -> str:
+    """Assemble the wind-vs-sun comparison report as a single string."""
+    daylight = set(solar.daylight_hours(sun_hourly, threshold))
+    best = combined_watering_hours(wind_hourly, sun_hourly, n=3, threshold=threshold)
+
+    sections = []
+    sections.append(f"Wind vs sun comparison for {location_name}")
+    sections.append(
+        f"Based on ~{years} year(s) of hourly data ({observations:,} observations)."
+    )
+    sections.append("")
+    sections.append("=== Best watering hours (low wind + low daylight sun) ===")
+    if best:
+        best_str = ", ".join(_fmt_hour(h) for h in best)
+        sections.append(
+            f"{best_str} — calmest wind while the sun is still weak, for the least "
+            "drift and evaporation."
+        )
+    else:
+        sections.append("No daylight hours found for this location/period.")
+    sections.append("")
+    sections.append("=== Mean wind vs mean sun by hour ===")
+    sections.append(compare_table(wind_hourly, sun_hourly, unit, daylight))
     sections.append("")
     return "\n".join(sections)
