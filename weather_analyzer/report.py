@@ -256,3 +256,81 @@ def build_comparison_report(
     sections.append(compare_table(wind_hourly, sun_hourly, unit, daylight))
     sections.append("")
     return "\n".join(sections)
+
+
+# --- Year overview: wind + sun across hour and month ------------------------
+
+
+def _normalize_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Scale a whole DataFrame to [0, 1] over its non-NaN values."""
+    vmin = df.min().min()
+    vmax = df.max().max()
+    if pd.isna(vmin) or vmax == vmin:
+        return df * 0.0
+    return (df - vmin) / (vmax - vmin)
+
+
+def suitability_matrix(
+    wind_matrix: pd.DataFrame,
+    sun_matrix: pd.DataFrame,
+    threshold: float = solar.DEFAULT_DAYLIGHT_THRESHOLD,
+) -> pd.DataFrame:
+    """Combined watering score per (month, hour); lower = better.
+
+    Restricted to daylight cells (mean radiation above ``threshold``); other
+    cells are NaN. Wind and radiation are each normalized to [0, 1] across the
+    daylight cells and summed, so a low score means calm AND low sun.
+    """
+    daylight = sun_matrix > threshold
+    wind = wind_matrix.where(daylight)
+    sun = sun_matrix.where(daylight)
+    return _normalize_frame(wind) + _normalize_frame(sun)
+
+
+def best_hour_per_month(score_matrix: pd.DataFrame) -> "dict[int, int]":
+    """Map each month to the hour with the best (lowest) suitability score."""
+    result: dict[int, int] = {}
+    for month, row in score_matrix.iterrows():
+        if row.notna().any():
+            result[int(month)] = int(row.idxmin())
+    return result
+
+
+def build_overview_report(
+    wind_matrix: pd.DataFrame,
+    sun_matrix: pd.DataFrame,
+    location_name: str,
+    years: int,
+    observations: int,
+    threshold: float = solar.DEFAULT_DAYLIGHT_THRESHOLD,
+) -> str:
+    """Assemble the year-overview text report (best watering cells)."""
+    score = suitability_matrix(wind_matrix, sun_matrix, threshold)
+    by_month = best_hour_per_month(score)
+
+    sections = []
+    sections.append(f"Year overview (wind + sun by hour and month) for {location_name}")
+    sections.append(
+        f"Based on ~{years} year(s) of hourly data ({observations:,} observations)."
+    )
+    sections.append("")
+    sections.append("=== Best watering hour per month (calm + low daylight sun) ===")
+    if by_month:
+        for month in range(1, 13):
+            if month in by_month:
+                sections.append(
+                    f"  {analyze.MONTH_NAMES[month - 1]}: {_fmt_hour(by_month[month])}"
+                )
+    else:
+        sections.append("No daylight cells found for this location/period.")
+    sections.append("")
+
+    stacked = score.stack().sort_values()
+    if not stacked.empty:
+        sections.append("=== Overall best (month, hour) cells ===")
+        for (month, hour), _ in stacked.head(5).items():
+            sections.append(
+                f"  {analyze.MONTH_NAMES[int(month) - 1]} {_fmt_hour(int(hour))}"
+            )
+        sections.append("")
+    return "\n".join(sections)

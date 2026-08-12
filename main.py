@@ -29,9 +29,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--metric",
         default="both",
-        choices=["wind", "sun", "both", "compare"],
-        help="Which analysis to run (default: %(default)s). "
-        "'compare' overlays wind and sun for every hour.",
+        choices=["wind", "sun", "both", "compare", "overview"],
+        help="Which analysis to run (default: %(default)s). 'compare' overlays "
+        "wind and sun by hour; 'overview' shows them across hour AND month.",
     )
     p.add_argument(
         "--location",
@@ -171,6 +171,49 @@ def _run_compare(
     return 0
 
 
+def _run_overview(
+    loc: Location, start_date: str, end_date: str, cfg: Config, use_cache: bool
+) -> int:
+    unit = cfg.wind_speed_unit
+    wind_df, rc = _fetch(
+        lambda: fetch.fetch_wind(
+            loc.latitude, loc.longitude, start_date, end_date,
+            unit=unit, cache_dir=cfg.cache_dir, use_cache=use_cache,
+        )
+    )
+    if rc:
+        return rc
+    sun_df, rc = _fetch(
+        lambda: fetch.fetch_solar(
+            loc.latitude, loc.longitude, start_date, end_date,
+            cache_dir=cfg.cache_dir, use_cache=use_cache,
+        )
+    )
+    if rc:
+        return rc
+
+    print(f"[overview] {len(wind_df):,} + {len(sun_df):,} hourly observations. Analyzing...")
+    wind_matrix = analyze.by_month_hour(wind_df)
+    sun_matrix = solar.by_month_hour(sun_df)
+    score = report.suitability_matrix(wind_matrix, sun_matrix)
+
+    text = report.build_overview_report(
+        wind_matrix, sun_matrix, loc.name, cfg.years, len(wind_df)
+    )
+    summary_path = report.write_report(text, cfg.output_dir, "overview_summary.txt")
+    bubble_path = plots.bubble_grid(wind_matrix, sun_matrix, loc.name, unit, cfg.output_dir)
+    curves_path = plots.daily_curves(wind_matrix, sun_matrix, loc.name, unit, cfg.output_dir)
+    heat_path = plots.suitability_heatmap(score, loc.name, cfg.output_dir)
+
+    print()
+    print(text)
+    print(f"Saved overview summary    : {summary_path}")
+    print(f"Saved bubble grid         : {bubble_path}")
+    print(f"Saved daily curves        : {curves_path}")
+    print(f"Saved suitability heatmap : {heat_path}")
+    return 0
+
+
 def run(cfg: Config, metric: str = "both", use_cache: bool = True) -> int:
     """Execute the selected pipeline(s). Returns a process exit code."""
     try:
@@ -187,6 +230,8 @@ def run(cfg: Config, metric: str = "both", use_cache: bool = True) -> int:
 
     if metric == "compare":
         return _run_compare(loc, start_date, end_date, cfg, use_cache)
+    if metric == "overview":
+        return _run_overview(loc, start_date, end_date, cfg, use_cache)
 
     # Wind and sun are independent API calls, so run both even if one fails and
     # return the worst exit code — a wind failure shouldn't hide the sun report.
