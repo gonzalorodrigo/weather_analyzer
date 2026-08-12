@@ -30,6 +30,9 @@ python main.py --metric wind --location "40.015, -105.27"
 # Compare wind vs sun for every hour (overlay chart + combined best-hours):
 python main.py --metric compare --location "Boulder, Colorado"
 
+# Year overview: wind + sun across hour AND month (3 charts):
+python main.py --metric overview --location "Boulder, Colorado"
+
 # Force a fresh download instead of using the local cache:
 python main.py --location "Boulder, Colorado" --no-cache
 ```
@@ -41,7 +44,7 @@ Set your own default location once by editing `location` in **`config.py`**, the
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--metric` | `both` | Which analysis: `wind`, `sun`, `both`, or `compare` |
+| `--metric` | `both` | Which analysis: `wind`, `sun`, `both`, `compare`, or `overview` |
 | `--location` | from `config.py` | Place name or `"lat, lon"` |
 | `--years` | 5 | Years of history to analyze |
 | `--unit` | `kmh` | Wind speed unit: `kmh`, `ms`, `mph`, `kn` (wind only) |
@@ -71,6 +74,16 @@ Written to `output/` (git-ignored):
   plus a side-by-side table of mean wind and mean sun for every hour.
 - **`wind_sun_by_hour.png`** — dual-axis chart overlaying mean wind (left axis) and mean
   solar radiation (right axis) against hour of day.
+
+**Overview** (`--metric overview`) — wind + sun across hour *and* month:
+- **`overview_summary.txt`** — best watering hour per month, and the overall best
+  (month, hour) cells.
+- **`overview_bubble.png`** — month × hour bubble grid: dot **colour = sun**, dot
+  **size = wind** (all four variables in one view).
+- **`overview_daily_curves.png`** — 3×4 small multiples, one dual-axis daily curve per
+  month (shared scales), showing how the wind/sun rhythm shifts through the year.
+- **`overview_suitability.png`** — month × hour heatmap of the combined watering score
+  (greener = calmer & less sun; grey = night).
 
 Nighttime has ~0 sun, so the sun analysis filters to **daylight** and ranks within it —
 the weak-sun hours it surfaces are the dawn/dusk edges, not the middle of the night.
