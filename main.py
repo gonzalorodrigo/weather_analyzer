@@ -1,8 +1,12 @@
-"""CLI: analyze historical wind to find the calmest hours for watering.
+"""CLI: analyze historical weather to find the best hours for watering.
+
+Reports the calmest hours (least wind) and/or the least-sun daylight hours for a
+location, from Open-Meteo's historical archive.
 
 Usage:
-    python main.py                          # uses config.py defaults
-    python main.py --location "Boulder, Colorado" --years 5
+    python main.py                                   # both analyses, config defaults
+    python main.py --metric sun --location "Boulder, Colorado"
+    python main.py --metric wind --years 5
     python main.py --location "40.015, -105.27" --no-cache
 """
 
@@ -10,16 +14,24 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import Callable, Optional, Tuple
 
+import pandas as pd
 import requests
 
 from config import DEFAULT_CONFIG, Config
-from weather_analyzer import analyze, fetch, plots, report
-from weather_analyzer.geocode import geocode
+from weather_analyzer import analyze, fetch, plots, report, solar
+from weather_analyzer.geocode import Location, geocode
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument(
+        "--metric",
+        default="both",
+        choices=["wind", "sun", "both"],
+        help="Which analysis to run (default: %(default)s).",
+    )
     p.add_argument(
         "--location",
         default=DEFAULT_CONFIG.location,
@@ -47,8 +59,79 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def run(cfg: Config, use_cache: bool = True) -> int:
-    """Execute the full pipeline. Returns a process exit code."""
+def _fetch(fetch_call: Callable[[], pd.DataFrame]) -> Tuple[Optional[pd.DataFrame], int]:
+    """Run a fetch, mapping failures to (None, exit_code)."""
+    try:
+        return fetch_call(), 0
+    except requests.RequestException as exc:
+        print(f"Network error while fetching data: {exc}", file=sys.stderr)
+        return None, 1
+    except RuntimeError as exc:
+        print(f"Data error: {exc}", file=sys.stderr)
+        return None, 1
+
+
+def _run_wind(
+    loc: Location, start_date: str, end_date: str, cfg: Config, use_cache: bool
+) -> int:
+    unit = cfg.wind_speed_unit
+    df, rc = _fetch(
+        lambda: fetch.fetch_wind(
+            loc.latitude, loc.longitude, start_date, end_date,
+            unit=unit, cache_dir=cfg.cache_dir, use_cache=use_cache,
+        )
+    )
+    if rc:
+        return rc
+
+    print(f"[wind] {len(df):,} hourly observations. Analyzing...")
+    hourly = analyze.by_hour(df)
+    matrix = analyze.by_month_hour(df)
+
+    text = report.build_report(df, hourly, loc.name, unit, cfg.years)
+    summary_path = report.write_report(text, cfg.output_dir, "wind_summary.txt")
+    heatmap_path = plots.heatmap(matrix, loc.name, unit, cfg.output_dir)
+    bar_path = plots.hourly_bar(hourly, loc.name, unit, cfg.output_dir)
+
+    print()
+    print(text)
+    print(f"Saved wind summary : {summary_path}")
+    print(f"Saved wind heatmap : {heatmap_path}")
+    print(f"Saved wind bar chart: {bar_path}")
+    return 0
+
+
+def _run_sun(
+    loc: Location, start_date: str, end_date: str, cfg: Config, use_cache: bool
+) -> int:
+    df, rc = _fetch(
+        lambda: fetch.fetch_solar(
+            loc.latitude, loc.longitude, start_date, end_date,
+            cache_dir=cfg.cache_dir, use_cache=use_cache,
+        )
+    )
+    if rc:
+        return rc
+
+    print(f"[sun] {len(df):,} hourly observations. Analyzing...")
+    hourly = solar.by_hour(df)
+    matrix = solar.by_month_hour(df)
+
+    text = report.build_sun_report(df, hourly, loc.name, cfg.years)
+    summary_path = report.write_report(text, cfg.output_dir, "sun_summary.txt")
+    heatmap_path = plots.sun_heatmap(matrix, loc.name, cfg.output_dir)
+    bar_path = plots.sun_hourly_bar(hourly, loc.name, cfg.output_dir)
+
+    print()
+    print(text)
+    print(f"Saved sun summary : {summary_path}")
+    print(f"Saved sun heatmap : {heatmap_path}")
+    print(f"Saved sun bar chart: {bar_path}")
+    return 0
+
+
+def run(cfg: Config, metric: str = "both", use_cache: bool = True) -> int:
+    """Execute the selected pipeline(s). Returns a process exit code."""
     try:
         loc = geocode(cfg.location)
     except ValueError as exc:
@@ -59,41 +142,16 @@ def run(cfg: Config, use_cache: bool = True) -> int:
         return 1
 
     print(f"Location: {loc.name} ({loc.latitude:.4f}, {loc.longitude:.4f})")
-
-    unit = cfg.wind_speed_unit
     start_date, end_date = fetch.default_date_range(cfg.years)
-    try:
-        df = fetch.fetch_wind(
-            loc.latitude,
-            loc.longitude,
-            start_date,
-            end_date,
-            unit=unit,
-            cache_dir=cfg.cache_dir,
-            use_cache=use_cache,
-        )
-    except requests.RequestException as exc:
-        print(f"Network error while fetching data: {exc}", file=sys.stderr)
-        return 1
-    except RuntimeError as exc:
-        print(f"Data error: {exc}", file=sys.stderr)
-        return 1
 
-    print(f"Got {len(df):,} hourly observations. Analyzing...")
-    hourly = analyze.by_hour(df)
-    matrix = analyze.by_month_hour(df)
-
-    text = report.build_report(df, hourly, loc.name, unit, cfg.years)
-    summary_path = report.write_report(text, cfg.output_dir)
-    heatmap_path = plots.heatmap(matrix, loc.name, unit, cfg.output_dir)
-    bar_path = plots.hourly_bar(hourly, loc.name, unit, cfg.output_dir)
-
-    print()
-    print(text)
-    print(f"Saved summary : {summary_path}")
-    print(f"Saved heatmap : {heatmap_path}")
-    print(f"Saved bar chart: {bar_path}")
-    return 0
+    # Wind and sun are independent API calls, so run both even if one fails and
+    # return the worst exit code — a wind failure shouldn't hide the sun report.
+    rc = 0
+    if metric in ("wind", "both"):
+        rc = max(rc, _run_wind(loc, start_date, end_date, cfg, use_cache))
+    if metric in ("sun", "both"):
+        rc = max(rc, _run_sun(loc, start_date, end_date, cfg, use_cache))
+    return rc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -105,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         cache_dir=args.cache_dir,
         output_dir=args.output_dir,
     )
-    return run(cfg, use_cache=not args.no_cache)
+    return run(cfg, metric=args.metric, use_cache=not args.no_cache)
 
 
 if __name__ == "__main__":
