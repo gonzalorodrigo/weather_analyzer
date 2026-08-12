@@ -15,7 +15,8 @@ import matplotlib.pyplot as plt  # noqa: E402  (must follow backend selection)
 import pandas as pd  # noqa: E402
 
 from . import analyze  # noqa: E402
-from .report import UNIT_LABELS  # noqa: E402
+from . import solar  # noqa: E402
+from .report import RADIATION_LABEL, UNIT_LABELS  # noqa: E402
 
 
 def heatmap(
@@ -65,6 +66,81 @@ def hourly_bar(
     ax.set_xlabel("Hour of day (local)")
     ax.set_ylabel(f"Mean wind speed ({label})")
     ax.set_title(f"Mean wind speed by hour — {location_name} (calmest 5 highlighted)")
+    ax.grid(axis="y", linestyle=":", alpha=0.5)
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+    return path
+
+
+# --- Solar radiation charts -------------------------------------------------
+
+
+def sun_heatmap(
+    matrix: pd.DataFrame, location_name: str, output_dir: str
+) -> str:
+    """Save a month (rows) x hour (cols) heatmap of mean solar radiation."""
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "sun_heatmap.png")
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    im = ax.imshow(matrix.values, aspect="auto", origin="upper", cmap="inferno")
+
+    ax.set_xticks(range(24))
+    ax.set_xticklabels([f"{h:02d}" for h in range(24)])
+    ax.set_yticks(range(12))
+    ax.set_yticklabels(analyze.MONTH_NAMES)
+    ax.set_xlabel("Hour of day (local)")
+    ax.set_ylabel("Month")
+    ax.set_title(f"Mean solar radiation by hour and month — {location_name}")
+
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label(f"Mean solar radiation ({RADIATION_LABEL})")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+    return path
+
+
+def sun_hourly_bar(
+    hourly: pd.DataFrame,
+    location_name: str,
+    output_dir: str,
+    threshold: float = solar.DEFAULT_DAYLIGHT_THRESHOLD,
+) -> str:
+    """Save a bar chart of mean radiation by hour.
+
+    Night hours (below the daylight threshold) are greyed; the weakest-sun
+    daylight hours are highlighted.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "sun_by_hour.png")
+
+    values = hourly["mean_radiation"].reindex(range(24))
+    daylight = set(solar.daylight_hours(hourly, threshold))
+    weak = set(solar.least_sun_daylight_hours(hourly, n=5, threshold=threshold))
+
+    def _color(h: int) -> str:
+        if h in weak:
+            return "#e76f51"  # weakest-sun daylight hours
+        if h in daylight:
+            return "#f4a261"  # other daylight hours
+        return "#cdd0d4"  # night
+
+    colors = [_color(h) for h in range(24)]
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.bar(range(24), values.values, color=colors)
+    ax.set_xticks(range(24))
+    ax.set_xticklabels([f"{h:02d}" for h in range(24)])
+    ax.set_xlabel("Hour of day (local)")
+    ax.set_ylabel(f"Mean solar radiation ({RADIATION_LABEL})")
+    ax.set_title(
+        f"Mean solar radiation by hour — {location_name} "
+        "(weakest-sun daylight hours highlighted)"
+    )
     ax.grid(axis="y", linestyle=":", alpha=0.5)
 
     fig.tight_layout()
