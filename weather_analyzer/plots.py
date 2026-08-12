@@ -147,3 +147,59 @@ def sun_hourly_bar(
     fig.savefig(path, dpi=120)
     plt.close(fig)
     return path
+
+
+# --- Wind vs sun comparison chart -------------------------------------------
+
+WIND_COLOR = "#2a9d8f"
+SUN_COLOR = "#e76f51"
+
+
+def wind_sun_overlay(
+    wind_hourly: pd.DataFrame,
+    sun_hourly: pd.DataFrame,
+    location_name: str,
+    unit: str,
+    output_dir: str,
+) -> str:
+    """Save a dual-axis chart comparing mean wind and mean sun by hour of day.
+
+    Wind (left axis) and solar radiation (right axis) are on different scales,
+    so each gets its own y-axis; the shared x-axis is the hour of day.
+    """
+    label = UNIT_LABELS.get(unit, unit)
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "wind_sun_by_hour.png")
+
+    hours = range(24)
+    wind = wind_hourly["mean_speed"].reindex(hours)
+    sun = sun_hourly["mean_radiation"].reindex(hours)
+
+    fig, ax_wind = plt.subplots(figsize=(12, 5))
+    ax_sun = ax_wind.twinx()
+
+    (l_wind,) = ax_wind.plot(
+        hours, wind.values, color=WIND_COLOR, marker="o", label=f"Wind ({label})"
+    )
+    (l_sun,) = ax_sun.plot(
+        hours, sun.values, color=SUN_COLOR, marker="s",
+        label=f"Sun ({RADIATION_LABEL})",
+    )
+
+    ax_wind.set_xticks(list(hours))
+    ax_wind.set_xticklabels([f"{h:02d}" for h in hours])
+    ax_wind.set_xlabel("Hour of day (local)")
+    ax_wind.set_ylabel(f"Mean wind speed ({label})", color=WIND_COLOR)
+    ax_sun.set_ylabel(f"Mean solar radiation ({RADIATION_LABEL})", color=SUN_COLOR)
+    ax_wind.tick_params(axis="y", labelcolor=WIND_COLOR)
+    ax_sun.tick_params(axis="y", labelcolor=SUN_COLOR)
+    ax_wind.set_ylim(bottom=0)
+    ax_sun.set_ylim(bottom=0)
+    ax_wind.set_title(f"Wind vs sun by hour — {location_name}")
+    ax_wind.grid(axis="y", linestyle=":", alpha=0.4)
+    ax_wind.legend(handles=[l_wind, l_sun], loc="upper left")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+    return path

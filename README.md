@@ -27,6 +27,9 @@ python main.py --location "Boulder, Colorado" --years 5
 python main.py --metric sun --location "Boulder, Colorado"
 python main.py --metric wind --location "40.015, -105.27"
 
+# Compare wind vs sun for every hour (overlay chart + combined best-hours):
+python main.py --metric compare --location "Boulder, Colorado"
+
 # Force a fresh download instead of using the local cache:
 python main.py --location "Boulder, Colorado" --no-cache
 ```
@@ -38,7 +41,7 @@ Set your own default location once by editing `location` in **`config.py`**, the
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--metric` | `both` | Which analysis: `wind`, `sun`, or `both` |
+| `--metric` | `both` | Which analysis: `wind`, `sun`, `both`, or `compare` |
 | `--location` | from `config.py` | Place name or `"lat, lon"` |
 | `--years` | 5 | Years of history to analyze |
 | `--unit` | `kmh` | Wind speed unit: `kmh`, `ms`, `mph`, `kn` (wind only) |
@@ -62,6 +65,12 @@ Written to `output/` (git-ignored):
 - **`sun_heatmap.png`** — month × hour heatmap of mean solar radiation.
 - **`sun_by_hour.png`** — mean solar radiation by hour; night greyed, weakest-sun daylight
   hours highlighted.
+
+**Compare** (`--metric compare`):
+- **`compare_summary.txt`** — the best watering hours (low wind *and* low daylight sun),
+  plus a side-by-side table of mean wind and mean sun for every hour.
+- **`wind_sun_by_hour.png`** — dual-axis chart overlaying mean wind (left axis) and mean
+  solar radiation (right axis) against hour of day.
 
 Nighttime has ~0 sun, so the sun analysis filters to **daylight** and ranks within it —
 the weak-sun hours it surfaces are the dawn/dusk edges, not the middle of the night.
